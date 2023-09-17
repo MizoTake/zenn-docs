@@ -1,0 +1,111 @@
+---
+title: "neumorphic.flutterを覗いて雰囲気で動くようにする"
+emoji: "📝"
+type: "tech"
+topics:
+  - "flutter"
+  - "dart"
+  - "neumorphic"
+published: true
+published_at: "2021-05-03 09:11"
+---
+
+# Flutterを触ってみたい
+
+[Flutter](https://flutter.dev/)を触って[neumorphic/neumorphic.flutter](https://github.com/neumorphic/neumorphic.flutter)を扱うときの備忘録です。
+
+Flutterが以前から気になっていたのと前前に話題になっていたneumorphicも触りたいなーと思って扱おうとしました。
+
+すると現行のもので動かそうとするといくつかエラーが出て動かなかったので一時対応は
+
+https://github.com/MizoTake/neumorphic.flutter
+
+forkしてブランチに入れ込んでいます。
+
+## 対応したもの
+
+### nullOk
+
+まずは `nullOk` というのが使えないというメッセージが出てきました。
+
+調べると
+
+https://flutter.dev/docs/release/breaking-changes/eliminating-nullok-parameters
+
+という公式ページに使われなくなったものということで移行ガイドまであり `maybe` を使うようにと書いてありました。
+きちんと移行を考えるなら使った方がいいと思うのですが今回は触ってみたさといじってみたさ優先で基本消して対応しました。
+
+### cast
+
+`/type 'NoDefaultCupertinoThemeData' is not a subtype of type 'CupertinoThemeData'`
+
+というエラーが出てきて正直Flutter触ったことなかったので何のこっちゃだったんですが色々見ていくと
+
+https://github.com/neumorphic/neumorphic.flutter/blob/master/lib/src/neumorphic/theme.dart#L309
+
+で起こっていて、渡してる型が受け取る型にキャストできない旨のものでした。
+
+```dart
+  NeuBasedCupertinoTheme({
+    @required NeuThemeData materialTheme,
+  }) : this._(
+          materialTheme,
+          (materialTheme.cupertinoOverrideTheme ?? const CupertinoThemeData())
+              .noDefault(), // ここでエラー
+        );
+
+~~~~ 省略 ~~~
+          _cupertinoOverrideTheme.barBackgroundColor,
+          _cupertinoOverrideTheme.scaffoldBackgroundColor,
+        );
+
+  final NeuThemeData _neuThemeData;
+  final CupertinoThemeData _cupertinoOverrideTheme; // 受け取る型にキャストできない
+
+```
+
+なんかこれに対応してるコードがないか探して
+
+https://github.com/flutter/flutter/
+
+flutter自身にあることがわかりました。
+
+https://github.com/flutter/flutter/blob/8c4538618f81a42e45cdb03c6a204f6e7bcf81b3/packages/flutter/lib/src/material/theme_data.dart#L1946
+
+これはマテリアルデザインの設定をしているところでかなり類似しているところがあり
+
+```dart
+  MaterialBasedCupertinoThemeData({
+    required ThemeData materialTheme,
+  }) : this._(
+    materialTheme,
+    (materialTheme.cupertinoOverrideTheme ?? const CupertinoThemeData()).noDefault(), // エラーの出ているところの処理は一緒
+  );
+
+~~~ 省略 ~~~
+        _cupertinoOverrideTheme.barBackgroundColor,
+        _cupertinoOverrideTheme.scaffoldBackgroundColor,
+      );
+
+  final ThemeData _materialTheme;
+  final NoDefaultCupertinoThemeData _cupertinoOverrideTheme; // 受け取る型がsuper classになってる
+  
+  ```
+
+なるほどぉ…ということで同じように対応
+その際に
+
+```dart
+
+import 'package:flutter/cupertino.dart'
+    show CupertinoTextThemeData, CupertinoTheme, CupertinoThemeData; // super classをimport
+
+```
+
+を追加しないといけなかったのでdartはこうやってimportするんだぁというメモ
+
+## まとめ
+
+これで想定通りにexampleが動きました。
+本家リポジトリ自体にPRなどの動きがないので一旦手元のリポジトリに残しておこうかなという感じです。
+dartの言語仕様とか把握出来たらもっといい書き方があるのかなーと思いつつよくわからないので雰囲気対応です。

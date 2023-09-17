@@ -1,0 +1,138 @@
+---
+title: "Unity WebGLのBuild and RunのRunを実行する拡張"
+emoji: "🤖"
+type: "tech"
+topics:
+  - "unity"
+  - "webgl"
+  - "editor拡張"
+published: true
+published_at: "2020-10-19 20:32"
+---
+
+## WebGLビルドを毎回するのはつらいんじゃ
+
+UnityでWebGLの作業をしていると `Build and Run` のRunだけしたい！！と思うことがあります。
+ググればchrome拡張など色々な方法が出てくるのですが、UnityEditorで完結する記事が見当たりませんでした。UnityEditorで完結したかったので調べて作りました。WindowsのUnityEditor(2020.1.1f1)で動作確認をしています。
+
+```cs:WebGLRunStop.cs
+using System;
+using System.Diagnostics;
+using System.Threading;
+using UnityEditor;
+using UnityEngine;
+
+public class WebGLRunStop
+{
+
+    private static Process process;
+    
+    [MenuItem("WebGL/Run")]
+    static void Run()
+    {
+        if (process != null) return;
+        var unityEditorDirectory = AppDomain.CurrentDomain.BaseDirectory;
+        var buildTool = unityEditorDirectory + "/Data/PlaybackEngines/WebGLSupport/BuildTools/";
+        var pythonHome = $"{buildTool}Emscripten_Win/python/2.7.5.3_64bit/";
+        var python = $"{pythonHome}python.exe".Replace("/", "\\");
+        var emrun = $"{buildTool}Emscripten/emrun.py".Replace("/", "\\");
+
+	var rootDirectory = $"{WebGLビルドをしたindex.htmlが存在するディレクトリ}".Replace("/", "\\");
+                
+        Environment.SetEnvironmentVariable("PYTHON_HOME", pythonHome, EnvironmentVariableTarget.Process);
+        Environment.SetEnvironmentVariable("PATH", $"{pythonHome}", EnvironmentVariableTarget.Process);
+        Environment.SetEnvironmentVariable("DYLD_LIBRARY_PATH", $"{pythonHome}/Lib;", EnvironmentVariableTarget.Process);
+        Environment.SetEnvironmentVariable("PYTHONPATH", $"{pythonHome}/Dlls;{pythonHome}/Lib;{pythonHome}/Lib/site-packages;", EnvironmentVariableTarget.Process);
+
+        ThreadPool.QueueUserWorkItem(_ =>
+        {
+            process = new Process
+            {
+                StartInfo =
+                {
+                    FileName = $"\"{python}\"",
+                    Arguments = $"\"{emrun}\" --port=5000 \"{rootDirectory}index.html\" getParameter=hogehoge",
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                }
+            };
+            process.Exited += (sender, e) =>
+            {
+                process.Dispose();
+                process = null;
+            };
+            process.Start();
+        });
+    }
+
+    [MenuItem("WebGL/Stop")]
+    static void Stop()
+    {
+        var hasExited = process?.HasExited ?? false;
+        if (hasExited) return;
+        process.CloseMainWindow();
+        process.Dispose();
+        process = null;
+    }
+}
+```
+
+これが全文になります。
+
+軽くまとめると `UnityのWebGLビルドツールの中にPythonでWebServerを立てる環境があったので乗っかりました` って感じです。
+
+少し分けて解説を付けます。
+
+```cs
+// 現在実行しているexeの場所(Editorで実行しているのでUnity.exeの場所)
+var unityEditorDirectory = AppDomain.CurrentDomain.BaseDirectory;
+// WebGLのビルドをサポートしているとあるディレクトリ
+var buildTool = unityEditorDirectory + "/Data/PlaybackEngines/WebGLSupport/BuildTools/";
+// Pythonの実行環境
+var pythonHome = $"{buildTool}Emscripten_Win/python/2.7.5.3_64bit/";
+var python = $"{pythonHome}python.exe".Replace("/", "\\");
+var emrun = $"{buildTool}Emscripten/emrun.py".Replace("/", "\\");
+
+var rootDirectory = $"{WebGLビルドをしたindex.htmlが存在するディレクトリ}".Replace("/", "\\");
+
+// PCのPython環境を見に行かないようにWebGLビルド用のPython環境を構築
+Environment.SetEnvironmentVariable("PYTHON_HOME", pythonHome, EnvironmentVariableTarget.Process);
+Environment.SetEnvironmentVariable("PATH", $"{pythonHome}", EnvironmentVariableTarget.Process);
+Environment.SetEnvironmentVariable("DYLD_LIBRARY_PATH", $"{pythonHome}/Lib;", EnvironmentVariableTarget.Process);
+Environment.SetEnvironmentVariable("PYTHONPATH", $"{pythonHome}/Dlls;{pythonHome}/Lib;{pythonHome}/Lib/site-packages;", EnvironmentVariableTarget.Process);
+```
+
+まずは上記のコードからです。軽くコメントを入れました。概ねコメントの通りです。
+ここで特筆すべきはPythonの環境についてだと思っています。Pythonは環境変数を頼りにdllなどを探すので意図した方に仕向けます。正直ここのコードは前にUnity内部でPythonの実行環境を構築した際に実行したコードをほぼコピペしていて最低限のコードではないと思うので削りたい場合は是非削ってください。前に構築した話 → 
+[UnityのStreamingAssets内でPython環境構築してみた](https://maketake.hatenablog.com/entry/2020/09/06/192931)
+
+```cs
+// メインスレッドで実行するとUnityを操作できなくなるので別スレッドでProcess起動する
+ThreadPool.QueueUserWorkItem(_ =>
+{
+    process = new Process
+    {
+	StartInfo =
+	{
+	    FileName = $"\"{python}\"",
+	    // emrunの引数は.pyを見て追記が必要であれば追記
+	    // index.htmlの後にGETパラメータの形にするとちゃんとURLに組み込まれる
+	    Arguments = $"\"{emrun}\" --port=5000 \"{rootDirectory}index.html\" getParameter=hogehoge",
+	    UseShellExecute = false,
+	    CreateNoWindow = true
+	}
+    };
+    process.Exited += (sender, e) =>
+    {
+	process.Dispose();
+	process = null;
+    };
+    process.Start();
+});
+```
+
+Processを実際に起動しているコードは上記になります。これとProcessをStopする部分は特筆すべき点がないので省きます。
+
+## まとめ
+自分の環境でしか試してませんので何か思ってない挙動があるかもしれません。何かあれば教えていただければ反映しますし、ローカル環境で治しちゃってください。
+今回作った拡張があれば `Build and Run` を毎回しないで済むしポートも指定できるので何かと便利かもしれません。

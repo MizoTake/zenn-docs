@@ -1,0 +1,218 @@
+---
+title: "OVRLipSyncMicInputを使うときにマイクの選択を簡単にしたい"
+emoji: "👄"
+type: "tech"
+topics:
+  - "csharp"
+  - "unity"
+  - "vrm"
+  - "ovr"
+published: true
+published_at: "2020-11-01 18:09"
+---
+
+## OVRLipSyncMicInputを使うときにマイクの選択がめんどくさかった
+
+VRMモデルをOVRLipSyncを使って口を動かそうと思った時にスムーズにマイクの切り替えができませんでした。 `OVRLipSyncMicInput.cs` を使って行おうとしたら
+
+|Play前|Play後|
+|---|---|
+|![](https://storage.googleapis.com/zenn-user-upload/1gjgzoc45ey414849ee9zn035td2)|![](https://storage.googleapis.com/zenn-user-upload/h3alkb1vef95iddme31lkqkejk3x)|
+
+使っているマイクを示している一番下にある項目 `Selected Device` にはマイクを配列で取得して最初の要素の文字列が入るようになっています。それが使うものとして動作します。切り替えるには `OVRLipSyncMicInput.cs` をいじるか外部から差し込むしかなかったので差し込むことにしました。
+
+
+## 作ったもの
+
+今回作ったのはVRMモデルにLipSyncをするものになりますのでその部分を含んだcsになります。UnityEditorのみの動作を想定しています。
+
+:::details VRMLipSyncContextMorphTarget.cs
+
+```cs:VRMLipSyncContextMorphTarget.cs
+using System.Collections.Generic;
+using System.Linq;
+#if UNITY_EDITOR
+using UnityEditor;
+#endif
+using UnityEngine;
+using VRM;
+
+namespace Component
+{
+    [RequireComponent(typeof(OVRLipSyncMicInput))]
+    [DefaultExecutionOrder(10000)]
+    public class VRMLipSyncContextMorphTarget : OVRLipSyncContext
+    {
+
+        [SerializeField] private VRMBlendShapeProxy shapeProxy;
+        [SerializeField, Range(0.0f, 2.0f)] private float visemesVolume = 2.0f;
+        
+	[HideInInspector] public string selected;
+
+        private BlendShapePreset[] visemePresets = {
+            BlendShapePreset.Neutral,
+            BlendShapePreset.Unknown,
+            BlendShapePreset.Unknown,
+            BlendShapePreset.Unknown,
+            BlendShapePreset.Unknown,
+            BlendShapePreset.Unknown,
+            BlendShapePreset.Unknown,
+            BlendShapePreset.Unknown,
+            BlendShapePreset.Unknown,
+            BlendShapePreset.Unknown,
+            BlendShapePreset.A,
+            BlendShapePreset.E,
+            BlendShapePreset.I,
+            BlendShapePreset.O,
+            BlendShapePreset.U
+        };
+
+        private void Start()
+        {
+            var micInput = GetComponent<OVRLipSyncMicInput>();
+            micInput.StopMicrophone();
+            micInput.selectedDevice = selected;
+            micInput.StartMicrophone();
+        }
+
+        void LateUpdate()
+        {
+            if (shapeProxy == null) return;
+            var frame = GetCurrentPhonemeFrame();
+            var values = visemePresets.Select((preset, i) => BlendShapePairBuilder(preset, frame.Visemes[i]));
+            shapeProxy.SetValues(values);
+        }
+
+        private KeyValuePair<BlendShapeKey, float> BlendShapePairBuilder(BlendShapePreset preset, float viseme)
+        {
+            return new KeyValuePair<BlendShapeKey, float>(BlendShapeKey.CreateFromPreset(preset), viseme * visemesVolume);
+        }
+    }
+    
+#if UNITY_EDITOR
+
+    [CustomEditor(typeof(VRMLipSyncContextMorphTarget))]
+    public class VRMLipSyncContextMorphTargetEditor : Editor
+    {
+
+        private VRMLipSyncContextMorphTarget vrmLipSyncContextMorphTarget;
+        private int selectedIndex;
+        private string selectedIndexKey = $"{nameof(VRMLipSyncContextMorphTarget)}.{nameof(selectedIndex)}";
+
+        void OnEnable()
+        {
+            vrmLipSyncContextMorphTarget = (VRMLipSyncContextMorphTarget)target;
+        }
+
+        public override void OnInspectorGUI()
+        {
+            DrawDefaultInspector();
+            
+            EditorGUI.BeginChangeCheck();
+
+            selectedIndex = EditorPrefs.GetInt(selectedIndexKey);
+            
+            var micDevices = Microphone.devices;
+            var label = "Select Microphone";
+            var index = micDevices.Length > 0 && selectedIndex < micDevices.Length ? EditorGUILayout.Popup(label, selectedIndex, micDevices) : -1;
+            
+            if (!EditorGUI.EndChangeCheck()) return;
+            Undo.RecordObject(vrmLipSyncContextMorphTarget, nameof(VRMLipSyncContextMorphTarget));
+            selectedIndex = index;
+            EditorPrefs.SetInt(selectedIndexKey, selectedIndex);
+            vrmLipSyncContextMorphTarget.selected = micDevices[index];
+        }
+    }
+#endif
+}
+```
+:::
+
+Inspectorで表示すると以下のようになります。
+
+![](https://storage.googleapis.com/zenn-user-upload/gmggz0zoc9t3qael359jphmh4r65)
+
+そしてマイクを選択するときはこう
+
+![](https://storage.googleapis.com/zenn-user-upload/xjs8m3zcg2t9ilh1zeinml62qqxu)
+
+これでだいぶ楽になりました。
+
+## 軽い解説
+
+VRMに反映している部分は省きます。
+
+`VRMLipSyncContextMorphTarget.cs` から
+
+```cs
+    [RequireComponent(typeof(OVRLipSyncMicInput))]
+    // OVRLipSyncMicInputのStart()の後に切り替えたいため
+    [DefaultExecutionOrder(10000)]
+    public class VRMLipSyncContextMorphTarget : OVRLipSyncContext
+    {
+
+        [SerializeField] private VRMBlendShapeProxy shapeProxy;
+        [SerializeField, Range(0.0f, 2.0f)] private float visemesVolume = 2.0f;
+        
+	// Inspectorで選択したマイクの名前を保持する
+	[HideInInspector] public string selected;
+
+	~~~ 省略 ~~~
+
+        private void Start()
+        {
+            // OVRLipSyncMicInputの初期化が終わってるはずなので切り替え処理を入れる
+            var micInput = GetComponent<OVRLipSyncMicInput>();
+            micInput.StopMicrophone();
+            micInput.selectedDevice = selected;
+            micInput.StartMicrophone();
+        }
+	
+	~~~ 省略 ~~~
+```
+
+次は `VRMLipSyncContextMorphTargetEditor`
+
+```cs
+    [CustomEditor(typeof(VRMLipSyncContextMorphTarget))]
+    public class VRMLipSyncContextMorphTargetEditor : Editor
+    {
+
+        private VRMLipSyncContextMorphTarget vrmLipSyncContextMorphTarget;
+        private int selectedIndex;
+	// EditorPrefsに保存するときのキー
+        private string selectedIndexKey = $"{nameof(VRMLipSyncContextMorphTarget)}.{nameof(selectedIndex)}";
+
+        void OnEnable()
+        {
+            vrmLipSyncContextMorphTarget = (VRMLipSyncContextMorphTarget)target;
+        }
+
+        public override void OnInspectorGUI()
+        {
+            DrawDefaultInspector();
+            
+            EditorGUI.BeginChangeCheck();
+
+            selectedIndex = EditorPrefs.GetInt(selectedIndexKey);
+            
+	    // UnityEngineで用意されているマイクの取得処理
+            var micDevices = Microphone.devices;
+            var label = "Select Microphone";
+	    // Inspectorで選択したマイクを取得する
+            var index = micDevices.Length > 0 && selectedIndex < micDevices.Length ? EditorGUILayout.Popup(label, selectedIndex, micDevices) : -1;
+            
+	    // Popupで変更がなければ処理を行わない
+            if (!EditorGUI.EndChangeCheck()) return;
+            Undo.RecordObject(vrmLipSyncContextMorphTarget, nameof(VRMLipSyncContextMorphTarget));
+            selectedIndex = index;
+            EditorPrefs.SetInt(selectedIndexKey, selectedIndex);
+	    // VRMLipSyncContextMorphTargetに保持させる
+            vrmLipSyncContextMorphTarget.selected = micDevices[index];
+        }
+    }
+```
+
+## まとめ
+
+Inspector拡張久しぶりにやりましたが簡単に選択UI作れたのでよかったです。作った後に、切り替えくらい実は別Componentとかでデフォルトにあるのでは…？と思いましたが考えないことにしました。
